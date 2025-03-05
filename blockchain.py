@@ -4,6 +4,7 @@ import json
 import time
 import requests
 import threading
+import os
 from pymongo import MongoClient
 
 app = Flask(__name__)
@@ -12,9 +13,9 @@ BLOCKCHAIN = []
 NODES = set()
 TOTAL_CIRCULATION = 100000
 CURRENT_SUPPLY = 0
-PORT = None  # Will be set dynamically
+PORT = None
 
-# Connect to MongoDB
+# MongoDB Connection
 MONGO_URI = "mongodb+srv://prorishab:prorishab@cluster0.0fmkg.mongodb.net/"
 client = MongoClient(MONGO_URI)
 db = client["test"]
@@ -34,8 +35,6 @@ def hash_block(block):
     block_string = json.dumps(block, sort_keys=True).encode()
     return hashlib.sha256(block_string).hexdigest()
 
-@app.route("/claim", methods=["GET"])
-@app.route("/claim", methods=["GET"])
 @app.route("/claim", methods=["GET"])
 def claim():
     global CURRENT_SUPPLY
@@ -61,16 +60,14 @@ def claim():
 
     num_likes = post.get("likes", 0)
 
-    # Step 1: Fetch already claimed coins for this key-password pair from the blockchain
     claimed_coins = 0
     for block in BLOCKCHAIN:
         for transaction in block["transactions"]:
             if transaction["key"] == key and transaction["password"] == password:
                 claimed_coins += transaction["coins"]
 
-    # Step 2: Calculate available likes and claimable coins
     available_likes = num_likes - (claimed_coins * 10)
-    max_claimable_coins = available_likes // 10  # 1 coin per 10 likes
+    max_claimable_coins = available_likes // 10
 
     if max_claimable_coins < 1:
         return jsonify({"error": "Not enough new likes to claim coins"}), 400
@@ -82,13 +79,12 @@ def claim():
         return jsonify({"error": "Coin limit exceeded"}), 400
 
     transaction = {"key": key, "password": password, "coins": coins_requested}
-
     previous_hash = "0" if len(BLOCKCHAIN) == 0 else hash_block(BLOCKCHAIN[-1])
     block = create_block([transaction], previous_hash)
 
     approvals = validate_with_peers(block)
 
-    if approvals < len(NODES) // 2:  # Majority approval required
+    if approvals < len(NODES) // 2:
         return jsonify({"error": "Not enough peer approvals"}), 403
 
     BLOCKCHAIN.append(block)
@@ -102,7 +98,7 @@ def validate_with_peers(block):
     approvals = 0
     for node in NODES:
         try:
-            response = requests.post(f"http://{node}/validate", json={"block": block})
+            response = requests.post(f"{node}/validate", json={"block": block})
             if response.status_code == 200:
                 approvals += 1
         except requests.exceptions.RequestException:
@@ -111,12 +107,11 @@ def validate_with_peers(block):
 
 @app.route("/validate", methods=["POST"])
 def validate_block():
-    """Peers validate the block"""
     block = request.json.get("block")
     if not block or "transactions" not in block:
         return jsonify({"error": "Invalid block format"}), 400
 
-    transaction = block["transactions"][0]  # Assuming 1 transaction per block
+    transaction = block["transactions"][0]
     key = transaction.get("key")
     password = transaction.get("password")
     coins = transaction.get("coins")
@@ -156,77 +151,44 @@ def register_nodes():
 
     return jsonify({"message": "Nodes registered!", "total_nodes": list(NODES)}), 200
 
-def sync_blockchain():
-    """Fetch the longest valid blockchain from peers and update the local chain."""
-    global BLOCKCHAIN
-
-    longest_chain = BLOCKCHAIN
-    for node in NODES:
-        try:
-            response = requests.get(f"http://{node}/chain")
-            if response.status_code == 200:
-                chain = response.json()["chain"]
-                if len(chain) > len(longest_chain):
-                    longest_chain = chain
-        except requests.exceptions.RequestException:
-            continue
-
-    BLOCKCHAIN = longest_chain
-    return {"message": "Blockchain synchronized!", "chain": BLOCKCHAIN}
-
-@app.route("/nodes/sync", methods=["GET"])
-def sync_chain_route():
-    result = sync_blockchain()
-    return jsonify(result), 200
-
 def broadcast_block(block):
-    """Notify all peer nodes about a new block"""
     for node in NODES:
         try:
-            requests.post(f"http://{node}/sync_block", json={"block": block})
+            requests.post(f"{node}/sync_block", json={"block": block})
         except requests.exceptions.RequestException:
             continue
 
 @app.route("/sync_block", methods=["POST"])
 def sync_block():
-    """Receive new block from peer nodes"""
     block = request.json.get("block")
     if block:
         BLOCKCHAIN.append(block)
     return jsonify({"message": "Block synced"}), 200
 
-def auto_sync():
-    """Auto-sync blockchain every 10 seconds"""
-    while True:
-        time.sleep(10)
-        with app.app_context():
-            sync_blockchain()
-            print("🔄 Blockchain synced!")
-
 def find_peers():
-    """Automatically find and register nodes on different ports"""
     global NODES
-    base_port = 5001
-    for port in range(base_port, base_port + 3):  # Scan 5001-5003
-        if port != PORT:
-            node = f"localhost:{port}"
-            try:
-                response = requests.post(f"http://{node}/nodes/register", json={"nodes": [f"localhost:{PORT}"]})
-                if response.status_code == 200:
-                    NODES.add(node)
-                    print(f"🔗 Connected to peer {node}")
-            except requests.exceptions.RequestException:
-                continue
+
+    known_nodes = [
+        "https://crypto-acun.onrender.com",
+        "https://crypto-1-ru5c.onrender.com",
+        "https://crypto-2-xzzj.onrender.com"
+    ]
+
+    my_url = os.getenv("RENDER_EXTERNAL_URL")
+
+    while True:
+        for node in known_nodes:
+            if node != my_url and node not in NODES:
+                try:
+                    response = requests.post(f"{node}/nodes/register", json={"nodes": [my_url]})
+                    if response.status_code == 200:
+                        NODES.add(node)
+                        print(f"🔗 Connected to new peer: {node}")
+                except requests.exceptions.RequestException:
+                    print(f"⚠️ Could not reach {node}")
+        
+        time.sleep(300)
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) != 2:
-        print("Usage: python blockchain.py <port>")
-        sys.exit(1)
-
-    PORT = int(sys.argv[1])
-
-    threading.Thread(target=auto_sync, daemon=True).start()
     threading.Thread(target=find_peers, daemon=True).start()
-
-    app.run(port=PORT)
+    app.run(host="0.0.0.0", port=10000)
