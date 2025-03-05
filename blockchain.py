@@ -101,6 +101,7 @@ def validate_with_peers(block):
             response = requests.post(f"{node}/validate", json={"block": block})
             if response.status_code == 200:
                 approvals += 1
+                print(f"✅ Block validated by peer: {node}")  # Print validation success
         except requests.exceptions.RequestException:
             continue
     return approvals
@@ -148,6 +149,7 @@ def register_nodes():
 
     for node in nodes:
         NODES.add(node)
+        print(f"🔗 Registered new peer: {node}")  # Print when a peer is registered
 
     return jsonify({"message": "Nodes registered!", "total_nodes": list(NODES)}), 200
 
@@ -183,10 +185,9 @@ def find_peers():
                     response = requests.post(f"{node}/nodes/register", json={"nodes": [my_url]})
                     if response.status_code == 200:
                         NODES.add(node)
-                        print(f"🔗 Connected to new peer: {node}")
+                        print(f"🔗 Connected to new peer: {node}")  # Print successful peer connection
                 except requests.exceptions.RequestException:
                     print(f"⚠️ Could not reach {node}")
-        
         time.sleep(300)
 
 if __name__ == "__main__":
